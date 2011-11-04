@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.views.generic.edit import FormMixin, ProcessFormView
+from django.views.generic.base import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
@@ -48,3 +49,82 @@ class SimpleHttpBackendView(BaseHttpBackendView):
             'text': self.conf.get('incoming_text', 'text'),
         })
         return kwargs
+
+"""
+This class is intended to allow an HTTP backend to use either GET
+or POST when accepting HTTP requests.
+
+The parameters must all be GET parameters if a GET request is used,
+or all be POST parameters if a POST request is used.
+
+The names of the expected request parameters can be specified in 
+localsettings.py as "incoming_identity" and "incoming_text". For example:
+
+INSTALLED_BACKENDS = {
+    ...
+    "http_backend": {
+        "ENGINE": "threadless_router.backends.http.outgoing",
+        ...
+        "incoming_identity": "snr",
+        "incoming_text": "msg"
+    }
+    ...
+}
+
+If "incoming_identity" is not specified, it is defaulted to "identity".
+If "incoming_text" is not specified, it is defaulted to "text".
+
+"""
+class GetOrPostHttpBackendView(View):
+
+    # Restrict requests to use only GET or POST; all other request methods will return a 405
+    http_method_names = ["get","post"]
+
+    """
+    Allow POST requests to be csrf exempt.
+    """
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super(GetOrPostHttpBackendView, self).dispatch(*args, **kwargs)
+
+    """
+    On a GET request, call handle_incoming to handle the request.
+    """
+    def get(self, request, *args, **kwargs):
+        return self.handle_incoming(request, *args, **kwargs)
+
+    """
+    On a POST request, call handle_incoming to handle the request.
+    """
+    def post(self, request, *args, **kwargs):
+        return self.handle_incoming(request, *args, **kwargs)
+
+    """
+    This method does the handling of the request for both GET and POST requests.
+    """
+    def handle_incoming(self, request, *args, **kwargs):
+        # Get backend name and load configuration settings
+        backend_name = kwargs.get("backend_name")
+        conf = settings.INSTALLED_BACKENDS[backend_name]
+        
+        # Retrieve parameter names for identity and text from configuration, or default them if not present
+        identity_param_name = conf.get("incoming_identity", "identity")
+        text_param_name = conf.get("incoming_text", "text")
+        
+        # Retrieve identity and text
+        request_params = None
+        if request.method == "GET":
+            request_params = request.GET
+        else:
+            request_params = request.POST
+        
+        identity = request_params.get(identity_param_name, "")
+        text = request_params.get(text_param_name, "")
+        
+        # If identity or text are not specified, return a 400, otherwise process request
+        if identity == "" or text == "":
+            return HttpResponseBadRequest("Insufficient Parameters")
+        else:
+            incoming(backend_name, identity, text)
+            return HttpResponse("OK")
+
